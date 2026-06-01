@@ -1,8 +1,4 @@
-python3 << 'EOF'
-with open('/mnt/user-data/outputs/App.js','r') as f:
-    app_code = f.read()
-
-html = """<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8"/>
@@ -16,15 +12,368 @@ html = """<!DOCTYPE html>
 <body>
   <div id="root"></div>
   <script type="text/babel">
-""" + app_code + """
-  const root = ReactDOM.createRoot(document.getElementById('root'));
-  root.render(<App/>);
-  </script>
-</body>
-</html>"""
+import { useState, useEffect, useRef } from "react";
 
-with open('/mnt/user-data/outputs/index.html','w') as f:
-    f.write(html)
+const STORAGE_KEY = "heroedailyflow-v1";
+const USER_KEY    = "heroedailyflow-user-v1";
+const MONTHS_ES   = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+const DAYS_ES     = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+const CAL_DAYS    = ["D","L","M","X","J","V","S"];
+const COLS = [
+  { id:"todo",  label:"Por Hacer", col:"#2563EB", bg:"rgba(37,99,235,0.12)",  dot:"#2563EB" },
+  { id:"doing", label:"Haciendo",  col:"#D97706", bg:"rgba(217,119,6,0.12)",  dot:"#D97706" },
+  { id:"done",  label:"Hecho",     col:"#059669", bg:"rgba(5,150,105,0.12)",  dot:"#059669" },
+];
+const PRIO = {
+  high:   { label:"Alta",  color:"#DC2626", bg:"rgba(220,38,38,0.12)",   border:"rgba(220,38,38,0.4)"   },
+  medium: { label:"Media", color:"#D97706", bg:"rgba(217,119,6,0.12)",   border:"rgba(217,119,6,0.4)"   },
+  low:    { label:"Baja",  color:"#059669", bg:"rgba(5,150,105,0.12)",   border:"rgba(5,150,105,0.4)"  },
+};
+const uid      = () => Math.random().toString(36).substr(2,9);
+const todayStr = () => new Date().toISOString().split("T")[0];
+const fmtDate  = s => { if(!s) return ""; const [y,m,d]=s.split("-"); return `${d}/${m}/${y}`; };
+const dateES   = () => { const d=new Date(); return `${DAYS_ES[d.getDay()]}, ${d.getDate()} de ${MONTHS_ES[d.getMonth()]}`; };
 
-print(f"✅ index.html creado: {len(html):,} chars ({len(html)//1024} KB)")
-EOF
+const LOGO = "";
+const Logo = ({ size=42 }) => (
+  <div style={{width:size,height:size,borderRadius:"50%",
+    background:"linear-gradient(135deg,#1E3A8A,#7C3AED)",
+    display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,
+    boxShadow:"0 2px 16px rgba(30,58,138,.4)",border:"2px solid rgba(255,215,0,.5)"}}>
+    <svg width={size*0.65} height={size*0.65} viewBox="0 0 40 46" fill="none">
+      <path d="M20 2L36 8V22C36 32 28.5 40 20 44C11.5 40 4 32 4 22V8L20 2Z"
+        fill="rgba(255,215,0,.2)" stroke="#FFD700" strokeWidth="1.5"/>
+      <polygon points="20,11 22.5,18 30,18 24,22.5 26.5,30 20,25.5 13.5,30 16,22.5 10,18 17.5,18"
+        fill="#FFD700"/>
+    </svg>
+  </div>
+);
+
+const beep = () => {
+  try {
+    const ctx=new(window.AudioContext||window.webkitAudioContext)();
+    [[880,0,.18],[880,.24,.18],[1100,.48,.3],[880,.84,.18],[1100,1.1,.38]].forEach(([f,s,d])=>{
+      const o=ctx.createOscillator(),g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.frequency.value=f;
+      g.gain.setValueAtTime(0,ctx.currentTime+s);
+      g.gain.linearRampToValueAtTime(.5,ctx.currentTime+s+.06);
+      g.gain.linearRampToValueAtTime(0,ctx.currentTime+s+d);
+      o.start(ctx.currentTime+s);o.stop(ctx.currentTime+s+d+.1);
+    });
+  }catch(e){}
+};
+
+/* ── SPLASH ── */
+const Splash = ({ onDone }) => {
+  const [bar, setBar] = useState(0);
+  useEffect(()=>{
+    const iv=setInterval(()=>setBar(b=>{ if(b>=100){clearInterval(iv);onDone();return 100;} return b+2; }),60);
+    return ()=>clearInterval(iv);
+  },[]);
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:999,
+      background:"linear-gradient(145deg,#1E3A8A,#2D1B69,#1E3A5F)",
+      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:18}}>
+      <div style={{position:"relative",width:140,height:140,display:"flex",alignItems:"center",justifyContent:"center"}}>
+        {[0,1,2].map(i=>(
+          <div key={i} style={{position:"absolute",borderRadius:"50%",
+            border:`1px solid rgba(255,215,0,${.3-i*.08})`,
+            width:90+i*28,height:90+i*28,
+            animation:`rp 2s ${i*.35}s ease-in-out infinite`}}/>
+        ))}
+        <div style={{animation:"lb 2s ease-in-out infinite"}}><Logo size={110}/></div>
+      </div>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:9,color:"rgba(255,215,0,.8)",letterSpacing:"4px",fontFamily:"'Cinzel',serif",marginBottom:5,textTransform:"uppercase"}}>PROYECTO HÉROE</div>
+        <div style={{fontSize:22,fontWeight:900,fontFamily:"'Cinzel',serif",color:"#FFFFFF",letterSpacing:"1px"}}>
+          Héroe Daily Flow
+        </div>
+      </div>
+      <div style={{width:180,height:4,background:"rgba(255,255,255,.2)",borderRadius:4,overflow:"hidden"}}>
+        <div style={{height:"100%",width:`${bar}%`,transition:"width .1s",
+          background:"linear-gradient(90deg,#F59E0B,#FFFFFF,#60A5FA)",borderRadius:4}}/>
+      </div>
+
+    </div>
+  );
+};
+
+/* ── MINI CALENDAR ── */
+const MiniCalendar = ({ tasks, onFilterDate, filterDate }) => {
+  const [calDate, setCalDate] = useState(new Date());
+  const yr = calDate.getFullYear();
+  const mo = calDate.getMonth();
+  const firstDay = new Date(yr, mo, 1).getDay();
+  const daysInMo = new Date(yr, mo+1, 0).getDate();
+  const today = todayStr();
+
+  const getTasksForDay = (d) => {
+    const ds = `${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    return tasks.filter(t => t.date === ds);
+  };
+
+  return (
+    <div style={{background:"rgba(255,255,255,.12)",borderRadius:14,padding:"10px 12px",
+      border:"1px solid rgba(255,255,255,.2)"}}>
+      {/* Cal header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+        <button onClick={()=>setCalDate(new Date(yr,mo-1))}
+          style={{background:"rgba(255,255,255,.2)",border:"none",borderRadius:7,
+            width:26,height:26,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer"}}>‹</button>
+        <div style={{fontSize:12,fontWeight:700,color:"#FFD700",fontFamily:"'Cinzel',serif",textTransform:"capitalize"}}>
+          {MONTHS_ES[mo].charAt(0).toUpperCase()+MONTHS_ES[mo].slice(1)} {yr}
+        </div>
+        <button onClick={()=>setCalDate(new Date(yr,mo+1))}
+          style={{background:"rgba(255,255,255,.2)",border:"none",borderRadius:7,
+            width:26,height:26,color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer"}}>›</button>
+      </div>
+      {/* Day names */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
+        {CAL_DAYS.map(d=>(
+          <div key={d} style={{textAlign:"center",fontSize:9,color:"rgba(255,255,255,.5)",fontWeight:700}}>{d}</div>
+        ))}
+      </div>
+      {/* Days */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+        {Array.from({length:firstDay}).map((_,i)=><div key={`e${i}`}/>)}
+        {Array.from({length:daysInMo},(_,i)=>{
+          const d = i+1;
+          const ds = `${yr}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+          const dt = getTasksForDay(d);
+          const isToday = ds === today;
+          const isSel   = ds === filterDate;
+          return (
+            <div key={d} onClick={()=>onFilterDate(isSel?null:ds)}
+              style={{
+                aspectRatio:"1",display:"flex",flexDirection:"column",
+                alignItems:"center",justifyContent:"center",
+                borderRadius:7,cursor:"pointer",fontSize:11,fontWeight:isToday?800:500,
+                color: isSel?"#0F0C1E":isToday?"#FFD700":"rgba(255,255,255,.85)",
+                background: isSel?"#FFD700":isToday?"rgba(255,215,0,.2)":"transparent",
+                position:"relative",transition:"all .15s"
+              }}>
+              {d}
+              {dt.length>0 && (
+                <div style={{display:"flex",gap:1.5,position:"absolute",bottom:2}}>
+                  {dt.slice(0,3).map((t,i)=>(
+                    <div key={i} style={{width:3.5,height:3.5,borderRadius:"50%",
+                      background:t.status==="done"?"#059669":t.status==="doing"?"#D97706":"#2563EB"}}/>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {filterDate && (
+        <button onClick={()=>onFilterDate(null)}
+          style={{marginTop:8,width:"100%",padding:"5px",background:"rgba(220,38,38,.15)",
+            border:"1px solid rgba(220,38,38,.3)",borderRadius:8,color:"#FCA5A5",
+            fontSize:11,fontWeight:600,cursor:"pointer"}}>
+          ✕ Ver todas las tareas
+        </button>
+      )}
+    </div>
+  );
+};
+
+/* ════════ APP ════════ */
+export default function App() {
+  const [splash,     setSplash]     = useState(true);
+  const [userName,   setUserName]   = useState("");
+  const [showName,   setShowName]   = useState(false);
+  const [nameInput,  setNameInput]  = useState("");
+  const [tasks,      setTasks]      = useState([]);
+  const [modal,      setModal]      = useState(false);
+  const [editTask,   setEditTask]   = useState(null);
+  const [dragId,     setDragId]     = useState(null);
+  const [dragOver,   setDragOver]   = useState(null);
+  const [listening,  setListening]  = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [parsing,    setParsing]    = useState(false);
+  const [parsed,     setParsed]     = useState(null);
+  const [alarm,      setAlarm]      = useState(null);
+  const [genPh,      setGenPh]      = useState(false);
+  const [vErr,       setVErr]       = useState("");
+  const [filterDate, setFilterDate] = useState(null);
+  const [showCal,    setShowCal]    = useState(false);
+  const [form, setForm] = useState({title:"",description:"",date:todayStr(),time:"",priority:"medium",tags:"",phrase:"",status:"todo"});
+  const aRefs=useRef({}); const rRef=useRef(null);
+
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const ur=await window.storage.get(USER_KEY);
+        const un=ur?JSON.parse(ur.value):"";
+        if(un) setUserName(un); else setShowName(true);
+        const tr=await window.storage.get(STORAGE_KEY);
+        if(tr) setTasks(JSON.parse(tr.value));
+      }catch{ setShowName(true); }
+    })();
+  },[]);
+
+  const saveName=async()=>{
+    if(!nameInput.trim()) return;
+    setUserName(nameInput.trim());
+    try{ await window.storage.set(USER_KEY,JSON.stringify(nameInput.trim())); }catch{}
+    setShowName(false);
+  };
+  const saveTasks=async n=>{ setTasks(n); try{ await window.storage.set(STORAGE_KEY,JSON.stringify(n)); }catch{}};
+  const schedule = (task) => {
+    // Clear existing timer for this task
+    if (aRefs.current[task.id]) {
+      clearTimeout(aRefs.current[task.id]);
+      delete aRefs.current[task.id];
+    }
+    if (!task.time || !task.date || task.status === "done") return;
+
+    // Parse date manually to avoid timezone issues
+    const [yr, mo, dy] = task.date.split("-").map(Number);
+    const [hh, mm]     = task.time.split(":").map(Number);
+    const taskTime     = new Date(yr, mo - 1, dy, hh, mm, 0, 0);
+    const delay        = taskTime.getTime() - Date.now();
+
+    if (delay > 0 && delay < 8 * 24 * 3600 * 1000) {
+      aRefs.current[task.id] = setTimeout(() => {
+        setAlarm(task);
+        beep();
+        // Try browser notification too
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          new Notification("⏰ " + task.title, {
+            body: task.description || "Es la hora de tu tarea",
+            icon: "/favicon.ico"
+          });
+        }
+      }, delay);
+    }
+  };
+
+  // Schedule alarms whenever tasks change
+  useEffect(() => {
+    tasks.forEach(schedule);
+    // Request notification permission on first load
+    if (typeof Notification !== "undefined" && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+    return () => {
+      Object.values(aRefs.current).forEach(clearTimeout);
+    };
+  }, [tasks]);
+
+  const startMic=async()=>{
+    setVErr("");
+    if(navigator.mediaDevices?.getUserMedia){
+      try{ const s=await navigator.mediaDevices.getUserMedia({audio:true}); s.getTracks().forEach(t=>t.stop()); }
+      catch(e){ setVErr(e.name==="NotAllowedError"?"🔒 Permití el micrófono en tu navegador.":"Sin micrófono."); return; }
+    }
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){ setVErr("Usá Chrome o Safari para voz."); return; }
+    const r=new SR(); r.lang="es-ES"; r.interimResults=true;
+    r.onstart=()=>{setListening(true);setTranscript("");setParsed(null);};
+    r.onresult=e=>{const t=Array.from(e.results).map(x=>x[0].transcript).join("");setTranscript(t);if(e.results[e.results.length-1].isFinal)setListening(false);};
+    r.onerror=ev=>{setListening(false);setVErr(ev.error==="not-allowed"?"🔒 Micrófono bloqueado.":ev.error==="no-speech"?"No se detectó voz.":"Error de micrófono.");};
+    r.onend=()=>setListening(false); rRef.current=r;
+    try{r.start();}catch{setListening(false);setVErr("No se pudo iniciar.");}
+  };
+  const stopMic=()=>{rRef.current?.stop();setListening(false);};
+
+  const parseV=async tx=>{
+    if(!tx.trim()) return; setParsing(true);
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:300,
+          messages:[{role:"user",content:`Tarea en español, SOLO JSON.\nTexto:"${tx}"\nHoy:${todayStr()}\n{"title":"","description":"","date":"YYYY-MM-DD","time":"HH:MM o vacío","priority":"high|medium|low"}`}]})});
+      const d=await res.json();
+      setParsed({id:uid(),tags:[],status:"todo",phrase:"",...JSON.parse(d.content?.[0]?.text?.trim().replace(/```json|```/g,"")||"{}")});
+    }catch{setParsed({id:uid(),title:tx,description:"",date:todayStr(),time:"",priority:"medium",tags:[],status:"todo",phrase:""});}
+    setParsing(false);
+  };
+  const confirm=()=>{if(!parsed)return;saveTasks([...tasks,parsed]);setTranscript("");setParsed(null);};
+  const genPhrase=async()=>{
+    setGenPh(true);
+    try{
+      const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:120,messages:[{role:"user",content:`Frase motivadora 1-2 oraciones.${form.title?` Tarea:"${form.title}".`:""} Solo la frase.`}]})});
+      const d=await r.json(); setForm(f=>({...f,phrase:d.content?.[0]?.text?.trim()||""}));
+    }catch{} setGenPh(false);
+  };
+
+  const openAdd=(s="todo")=>{setEditTask(null);setForm({title:"",description:"",date:filterDate||todayStr(),time:"",priority:"medium",tags:"",phrase:"",status:s});setModal(true);};
+  const openEdit=t=>{setEditTask(t);setForm({...t,tags:t.tags?.join(", ")||""});setModal(true);};
+  const save=()=>{
+    if(!form.title.trim()) return;
+    const t={...form,tags:form.tags?form.tags.split(",").map(s=>s.trim()).filter(Boolean):[]};
+    saveTasks(editTask?tasks.map(x=>x.id===editTask.id?{...x,...t}:x):[...tasks,{...t,id:uid()}]);
+    setModal(false);
+  };
+  const del=id=>{saveTasks(tasks.filter(t=>t.id!==id));setModal(false);};
+  const move=(id,s)=>saveTasks(tasks.map(t=>t.id===id?{...t,status:s}:t));
+  const done=id=>{move(id,"done");setAlarm(null);};
+
+  const visibleTasks = filterDate ? tasks.filter(t=>t.date===filterDate) : tasks;
+  const L={fontSize:9,fontWeight:700,color:"#1E40AF",textTransform:"uppercase",letterSpacing:"1px",marginBottom:4,fontFamily:"'Cinzel',serif"};
+
+  return (<>
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Raleway:wght@300;400;500;600;700&display=swap');
+      *{margin:0;padding:0;box-sizing:border-box;}
+      html,body{height:100%;overflow:hidden;background:#EEF2FF;font-family:'Raleway',sans-serif;color:#1E1B4B;}
+      ::-webkit-scrollbar{width:3px;} ::-webkit-scrollbar-thumb{background:#C7D2FE;border-radius:3px;}
+      input,textarea{background:#fff;border:1.5px solid #C7D2FE;border-radius:9px;padding:8px 11px;color:#1E1B4B;font-family:'Raleway',sans-serif;font-size:12px;outline:none;width:100%;transition:all .2s;}
+      input:focus,textarea:focus{border-color:#4F46E5;box-shadow:0 0 0 2px rgba(79,70,229,.12);}
+      textarea{resize:none;line-height:1.4;}
+      button{cursor:pointer;font-family:'Raleway',sans-serif;}
+      @keyframes fi{from{opacity:0}to{opacity:1}}
+      @keyframes su{from{transform:translateY(14px);opacity:0}to{transform:translateY(0);opacity:1}}
+      @keyframes pu{0%,100%{box-shadow:0 0 0 0 rgba(255,107,53,.5)}70%{box-shadow:0 0 0 10px rgba(255,107,53,0)}}
+      @keyframes rn{0%,100%{transform:rotate(0)}20%{transform:rotate(-14deg)}40%{transform:rotate(14deg)}60%{transform:rotate(-8deg)}80%{transform:rotate(8deg)}}
+      @keyframes gp{0%,100%{color:#D97706}50%{color:#F59E0B}}
+      @keyframes rp{0%,100%{opacity:.2;transform:scale(1)}50%{opacity:.5;transform:scale(1.05)}}
+      @keyframes lb{0%,100%{transform:scale(1) translateY(0)}50%{transform:scale(1.04) translateY(-6px)}}
+    `}</style>
+
+    {splash && <Splash onDone={()=>setSplash(false)}/>}
+
+    <div style={{height:"100vh",display:"flex",flexDirection:"column",background:"linear-gradient(160deg,#EEF2FF 0%,#E0E7FF 50%,#F0FDF4 100%)"}}>
+
+      {/* HEADER */}
+      <div style={{flexShrink:0,background:"linear-gradient(135deg,#1E3A8A,#2D1B69)",
+        boxShadow:"0 2px 16px rgba(30,58,138,.3)"}}>
+        <div style={{padding:"8px 12px",display:"flex",alignItems:"center",gap:10}}>
+          <Logo size={40}/>
+          <div style={{flex:1}}>
+            <div style={{fontSize:7,fontFamily:"'Cinzel',serif",fontWeight:700,letterSpacing:"2px",color:"rgba(255,215,0,.75)",textTransform:"uppercase"}}>PROYECTO HÉROE</div>
+            <div style={{fontSize:16,fontWeight:700,fontFamily:"'Cinzel',serif",color:"#FFFFFF",lineHeight:1.2}}>Héroe Daily Flow</div>
+          </div>
+          {userName && <div style={{fontSize:11,color:"#FCD34D",fontFamily:"'Cinzel',serif",animation:"gp 3s infinite",textAlign:"right"}}>
+            Hola,<br/><strong>{userName}</strong>
+          </div>}
+          <button onClick={()=>openAdd()} style={{background:"linear-gradient(135deg,#F59E0B,#D97706)",color:"#fff",border:"none",borderRadius:10,padding:"7px 12px",fontSize:11,fontFamily:"'Cinzel',serif",fontWeight:700,letterSpacing:"1px",boxShadow:"0 3px 10px rgba(245,158,11,.4)"}}>+ Nueva</button>
+        </div>
+
+        {/* DATE + CALENDAR TOGGLE */}
+        <div style={{padding:"0 12px 8px",display:"flex",alignItems:"center",gap:8}}>
+          <div style={{flex:1,fontSize:11,color:"rgba(255,255,255,.75)",fontWeight:500,textTransform:"capitalize"}}>
+            📅 {dateES()}
+          </div>
+          <button onClick={()=>setShowCal(s=>!s)} style={{background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.25)",borderRadius:8,padding:"4px 10px",color:"#FCD34D",fontSize:11,fontWeight:700,fontFamily:"'Cinzel',serif"}}>
+            {showCal ? "▲ Ocultar" : "📆 Calendario"}
+          </button>
+          {filterDate && <button onClick={()=>setFilterDate(null)} style={{background:"rgba(220,38,38,.3)",border:"1px solid rgba(220,38,38,.4)",borderRadius:8,padding:"4px 8px",color:"#FCA5A5",fontSize:10,fontWeight:600}}>✕ Filtro</button>}
+        </div>
+
+        {/* CALENDAR (expandable) */}
+        {showCal && (
+          <div style={{padding:"0 12px 10px",animation:"fi .2s ease"}}>
+            <MiniCalendar tasks={tasks} filterDate={filterDate} onFilterDate={setFilterDate}/>
+          </div>
+        )}
+      </div>
+
+      {/* BODY */}
+      <div style={{flex:1,minHeight:0,display:"flex",flexDirection:"column",padding:"8px 10px",gap:8,overflowY:"auto"}}>
+
+        {/* VOICE */}
+        <div style={{flexShrink:0,background:"#fff",borderRadius:14,padding:"10px 12px",
+          boxShadow:"0 2px 12px rgba(79,70,229,.1)",border:"1px solid #E0E7FF"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,margi
