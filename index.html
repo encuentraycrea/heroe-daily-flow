@@ -4,15 +4,15 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Héroe Daily Flow</title>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <style>*{margin:0;padding:0;box-sizing:border-box;}html,body{height:100%;}</style>
 </head>
-<body>
+<body style="margin:0;height:100%">
   <div id="root"></div>
-  <script type="text/babel">
-import { useState, useEffect, useRef } from "react";
+  <script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef } = React;
+
 
 const STORAGE_KEY = "heroedailyflow-v1";
 const USER_KEY    = "heroedailyflow-user-v1";
@@ -178,7 +178,7 @@ const MiniCalendar = ({ tasks, onFilterDate, filterDate }) => {
 };
 
 /* ════════ APP ════════ */
-export default function App() {
+function App() {
   const [splash,     setSplash]     = useState(true);
   const [userName,   setUserName]   = useState("");
   const [showName,   setShowName]   = useState(false);
@@ -203,10 +203,10 @@ export default function App() {
   useEffect(()=>{
     (async()=>{
       try{
-        const ur=await window.storage.get(USER_KEY);
+        const ur=JSON.parse(localStorage.getItem(USER_KEY)||"null");
         const un=ur?JSON.parse(ur.value):"";
         if(un) setUserName(un); else setShowName(true);
-        const tr=await window.storage.get(STORAGE_KEY);
+        const tr=JSON.parse(localStorage.getItem(STORAGE_KEY)||"null");
         if(tr) setTasks(JSON.parse(tr.value));
       }catch{ setShowName(true); }
     })();
@@ -215,10 +215,10 @@ export default function App() {
   const saveName=async()=>{
     if(!nameInput.trim()) return;
     setUserName(nameInput.trim());
-    try{ await window.storage.set(USER_KEY,JSON.stringify(nameInput.trim())); }catch{}
+    try{ localStorage.setItem(USER_KEY,JSON.stringify(nameInput.trim())); }catch{}
     setShowName(false);
   };
-  const saveTasks=async n=>{ setTasks(n); try{ await window.storage.set(STORAGE_KEY,JSON.stringify(n)); }catch{}};
+  const saveTasks=async n=>{ setTasks(n); try{ localStorage.setItem(STORAGE_KEY,JSON.stringify(n)); }catch{}};
   const schedule = (task) => {
     // Clear existing timer for this task
     if (aRefs.current[task.id]) {
@@ -376,4 +376,5 @@ export default function App() {
         {/* VOICE */}
         <div style={{flexShrink:0,background:"#fff",borderRadius:14,padding:"10px 12px",
           boxShadow:"0 2px 12px rgba(79,70,229,.1)",border:"1px solid #E0E7FF"}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,margi
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+            <span style={{fontSize:11,font
